@@ -40,3 +40,4 @@ include "lib/PS2Lib.asm"
 ;--------------------
 org	ram_start	                      ; Start loading variables at start of RAM
 key_down_flag   db    $0
+
