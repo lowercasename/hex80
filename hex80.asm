@@ -1,10 +1,10 @@
 ; Constants
 ;----------
 
-lcd_command     equ $00             ; LCD command I/O port
-lcd_data        equ $01             ; LCD data I/O port
-kb_high_byte    equ $20             ; I/O port for high byte of PS/2 serial register
-kb_low_byte     equ $40             ; I/O port for low byte of PS/2 serial register
+lcd_command     equ $00             ; LCD command I/O port (Y0.0)
+lcd_data        equ $01             ; LCD data I/O port (Y0.1)
+kb_high_byte    equ $20             ; I/O port for high byte of PS/2 buffer
+kb_low_byte     equ $40             ; I/O port for low byte of PS/2 buffer
 ps2_command     equ $20             ; Arduino PS/2 interface port (Y1)
 ram_start       equ $2000           ; The lowest address in the RAM
 ram_top         equ $7fff           ; The highest address in the RAM
@@ -32,26 +32,18 @@ int:
                                     ; The ASCII character code is now in A
     cp $7F                          ; Is it a backspace character?
     jp z,console_do_backspace
-    ld b,a                          ; Otherwise, save A into B
-    call lcd_send_data              ; Print the data byte in A on the LCD port
+    call console_print_char
 
-    ; SAVE CHARACTER INTO BUFFER
-    ; ld a,(buffer_pointer)           ; Get the current buffer pointer...
-    ; inc a                           ; ...increment it... (it'll roll over to 0 if it hits $FF)
-    ; ld h,0                          ; ...move it into HL...
-    ; ld l,a
-    ; ld de,buffer                    ; Get the start of the buffer into DE
-    ; add hl,de                       ; Offset the buffer by the pointer
-    ; ld (hl),b                       ; Copy the current character into the buffer
-    
-    ; POSITION THE CURSOR
-    ld a,(cursor)                   ; Get the current location of the cursor ($00 - $4F)
-    inc a                           ; Increment by 1
-    cp $50                          ; $4F is the end of the LCD display's 80 characters
-    call nc,reset_cursor            ; If the cursor is greater than or equal to $50, reset it to $00
-    call z,reset_cursor
-    ld (cursor),a                   ; Save the new cursor location
-    call set_cursor                 ; Position the cursor in the right place
+    position_cursor:
+        ld a,(cursor)                   ; Get the current location of the cursor ($00 - $4F)
+        inc a                           ; Increment by 1
+        cp $50                          ; $4F is the end of the LCD display's 80 characters
+        ; call nc,reset_cursor            ; If the cursor is greater than or equal to $50, reset it to $00
+        ; call z,reset_cursor
+        call nc,scroll_lcd_up
+        call z,scroll_lcd_up
+        ld (cursor),a                   ; Save the new cursor location
+        call set_cursor                 ; Position the cursor in the right place
 
     exit_interrupt:
         ; Interrupt setdown
@@ -78,24 +70,93 @@ reset_cursor:
     ld a,$00
     ret
 
+console_print_char:
+    ld b,a                          ; Save A into B
+    call lcd_send_data              ; Print the data byte in A on the LCD port
+
+    ; SAVE CHARACTER INTO BUFFER
+    ld a,(buffer_pointer)           ; Get the current buffer pointer...
+    ld h,0                          ; ...move it into HL...
+    ld l,a
+    ld de,buffer                    ; Get the start of the buffer into DE
+    add hl,de                       ; Offset the buffer by the pointer
+    ld (hl),b                       ; Copy the current character into the buffer
+    inc a                           ; Increment pointer (it'll roll over to 0 if it hits $FF)
+    ld (buffer_pointer),a           ; Save the incremented pointer
+    
+    ret
+
 console_do_backspace:
     call decrement_cursor
-    ; ld a,(buffer_pointer)           ; Move the buffer pointer back by 1
-    ; dec a
-    ; ld (buffer_pointer),a
     ld a,$20                        ; Put the space character code into A
     call lcd_send_data              ; Print the space
-    call decrement_cursor
-    ret
+
+    ; REMOVE CHARACTER FROM BUFFER
+    ld a,(buffer_pointer)           ; Move the buffer pointer back by 1
+    dec a
+    ld (buffer_pointer),a
+
+    call position_cursor
 
 decrement_cursor:
     ld a,(cursor)
     dec a
     cp $FF
-    jp z,reset_cursor
+    call z,reset_cursor
     ld (cursor),a
     call set_cursor
     ret
+
+scroll_lcd_up:
+    ld a,$14
+    ld (buffer_pointer),a          ; Set buffer pointer to character 1 of line 2
+    ld h,0
+    ld l,a
+    ld a,$0
+    ld (cursor),a                  ; Set cursor to character 1 of line 1
+    call set_cursor
+    ld b,$3C                       ; Do the following 60 times
+    scroll_loop:
+        ; Print the character stored in the buffer at this location
+        ld a,(buffer_pointer) 
+        ld h,0
+        ld l,a
+        ld de,buffer                    ; Get the start of the buffer into DE
+        add hl,de                       ; Offset the buffer by the pointer
+        ld a,(hl)                       ; Get the character at the pointer into A
+        push af
+        call lcd_send_data              ; Print the data byte in A on the LCD port
+
+        ; Place this character in the buffer at the cursor position
+        ld a,(cursor)
+        ld h,0                          ; ...move it into HL...
+        ld l,a
+        ld de,buffer                    ; Get the start of the buffer into DE
+        add hl,de                       ; Offset the buffer by the cursor
+        pop af
+        ld (hl),a                       ; Copy the current character into the buffer
+
+        ; Position and adjust the cursor
+        call position_cursor
+
+        ; Increment the buffer
+        ld a,(buffer_pointer)
+        inc a
+        ld (buffer_pointer),a
+
+        djnz scroll_loop
+
+    ld a,
+    ld a,$3C
+    ld (cursor),a
+    call set_cursor
+    ld hl,blank_line
+    call lcd_send_asciiz
+    ld a,$3C
+    ld (cursor),a
+    call set_cursor
+    ret
+    
 
 org $0100
 setup:
@@ -105,7 +166,7 @@ setup:
     ei                              ; Enable interrupts
 
     ; Reset memory
-    ld a,$14
+    ld a,0
     ld (cursor),a                   ; Set the cursor to the first space on line 2 of the display ($40)
     ld a,$00
     ld (buffer_pointer),a
@@ -122,25 +183,13 @@ main_loop:
     halt
     jp main_loop
 
-delay:
-    LD BC, 200h            ;Loads BC with hex 100
-    delay_outer:
-        LD DE, 200h            ;Loads DE with hex 100
-        delay_inner:
-            DEC DE                  ;Decrements DE
-            LD A, D                 ;Copies D into A
-            OR E                    ;Bitwise OR of E with A (now, A = D | E)
-            JP NZ, delay_inner            ;Jumps back to Inner: label if A is not zero
-            DEC BC                  ;Decrements BC
-            LD A, B                 ;Copies B into A
-            OR C                    ;Bitwise OR of C with A (now, A = B | C)
-            JP NZ, delay_outer            ;Jumps back to Outer: label if A is not zero
-            RET                     ;Return from call to this subroutine
-
 ; Data
 ;----------
 welcome_message:
     db "HEX-80 READY",0
+
+blank_line:
+    db "                    ",0
 
 lcd_position_map:
     db 0x0,0x1,0x2,0x3,0x4,0x5,0x6,0x7,0x8,0x9,0xa,0xb,0xc,0xd,0xe,0xf,0x10,0x11,0x12,0x13

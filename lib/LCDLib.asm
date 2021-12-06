@@ -11,11 +11,11 @@ lcd_cmd_function_set equ $38    ; 0000111000 - 8-bit, 2-line, small font
 lcd_cmd_display_on   equ $0c    ; Display on, cursor off
 lcd_cmd_cursor_blink equ $01    ; Blinking cursor. OR with lcd_cmd_display_on
 lcd_cmd_cursor_on    equ $02    ; Visible cursor. OR with lcd_cmd_display_on
+lcd_cmd_cursor_left  equ $10    ; Shift the cursor one position to the left
 
 ;List of commands to run at start up, $ff terminated
 lcd_init_commands:
     db lcd_cmd_function_set
-    ; db lcd_cmd_display_on
     db lcd_cmd_display_on or lcd_cmd_cursor_on or lcd_cmd_cursor_blink
     db lcd_cmd_clear
     db $ff                          ; End of data marker
