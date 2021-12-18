@@ -73,7 +73,7 @@ lcd_send_asciiz:
 
 ;---------LCD Initialisation
 ;In: None
-;Out: AF,HL corrupt
+:;Out: AF,HL corrupt
 lcd_initialise:
     ld hl,lcd_init_commands         ; Address of command list, $ff terminated
     jp lcd_send_command_list        ; Send the command list to the display and return

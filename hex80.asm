@@ -11,10 +11,9 @@ ram_top         equ $7fff           ; The highest address in the RAM
 
 ; Variables and flags
 ;--------------------
-counter         equ $7000           ; 2 bytes
-cursor          equ $7002           ; 1 byte
+cursor          equ $700           ; 1 byte
 buffer_pointer  equ $7003           ; 1 byte
-buffer          equ $7004           ; ?? bytes
+buffer          equ $2000           ; 255 bytes
 
 org $0                              ; Z80 starts reading here so we send it to the right location
     jp setup
@@ -182,6 +181,16 @@ setup:
 main_loop:
     halt
     jp main_loop
+
+increment_16:
+    ld a,($60)
+    inc a
+    ld ($60),a
+    jp nz,loop
+    ld a,($60+1)
+    inc a
+    ld ($60+1),a
+    jp loop
 
 ; Data
 ;----------
