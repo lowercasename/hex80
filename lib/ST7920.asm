@@ -6,13 +6,12 @@ lcd_cmd_clear           equ $01
 lcd_cmd_ext_function    equ $34         ; Extended on, graphics set in next command
 lcd_cmd_graphics_on     equ $36
 
-chars_per_row           equ 32
-max_rows                equ 8
-font_width              equ 3
-font_height             equ 6
-char_width              equ 4
-line_height             equ 8
-
+; chars_per_row           equ 32
+; max_rows                equ 8
+; font_width              equ 3
+; font_height             equ 6
+; char_width              equ 4
+; line_height             equ 8
 
 ;List of commands to run at start up, $ff terminated
 lcd_init_commands:
@@ -67,61 +66,38 @@ lcd_initialise:
     ld hl,lcd_init_commands         ; Address of command list, $ff terminated
     jp lcd_send_command_list        ; Send the command list to the display and return
 
+; Clear the 1 KB buffer (fill it with zeroes).
+; -----------------------------------------------------------------------------
+; Output:
+; HL - corrupt.
+; DE - corrupt.
+; BC - corrupt.
+; -----------------------------------------------------------------------------
 buffer_clear:
-    ld a,buffer
+    ld hl,buffer
+    ld de,buffer+1
+    ld bc,$400
+    ld (hl),0
+    ldir
+    ret
 
-; Sets bit at X,Y position stored in D,E.
-; Max X = 128 ($80)
-; Max Y = 32 ($20)
-; Corrupt: A, B
-buffer_set_bit:
-    ld a,e                              ; Load Y value into A 
-    cp $20                              
-    jr c,buffer_set_bit_row_1           ; Less than $20 - we're setting a bit in row 1
-    jr buffer_set_bit_row_2             ; More than $20 - setting in row 2
-
-    buffer_set_bit_row_1:
-        ld b,a
-        ld h,0
-        ld l,a
-        buffer_set_bit_row_1_multiply_loop:
-            push bc
-            ld b,0
-            ld c,$FF
-            add hl,bc
-            pop bc
-            djnz buffer_set_bit_row_1_multiply_loop
-        add l,d                         ; Add the X position to the final index
-        jr buffer_set_bit_set
-
-    buffer_set_bit_row_2:
-        sub $20
-        ld b,a
-        ld h,0
-        ld l,a
-        buffer_set_bit_row_2_multiply_loop:
-            push bc
-            ld b,0
-            ld c,$FF
-            add hl,bc
-            pop bc
-            djnz buffer_set_bit_row_2_multiply_loop
-        ld b,0
-        ld c,$7F
-        add hl,bc
-        add hl,d
-
-    buffer_set_bit_set:
-        ld a,8
-        ld bc,-1
-        ld d,0
-        buffer_set_bit_set_divide_loop:
-            sbc hl,de
-            inc bc
-            jr nc,buffer_set_bit_set_divide_loop
-        ld bc,buffer_start
-        ld 
-
+; Write a string into the buffer. String length + start position should not
+; exceed the maximum buffer size (1024 bytes).
+; -----------------------------------------------------------------------------
+; BC - length of string to write
+; HL - start address of string
+; DE - desired start address of string in buffer
+; 
+; Output: None.
+; -----------------------------------------------------------------------------
+buffer_write_string:
+    push hl
+    ld hl,buffer
+    add hl,de
+    ld de,hl
+    pop hl
+    ldir
+    ret
 
 ; Write an ASCII character in A to the position in HL (0 - 1024).
 ; buffer_write_char:
@@ -150,56 +126,191 @@ buffer_set_bit:
 ;              call buffer_set_bit
 ;         djnz buffer_write_char_loop_cols
 
-; The start of the character buffer is stored in 'buffer'. The screen fits 32 * 8 = 256 characters.
+; The framebuffer comprises 8 32-character lines, where each character
+; is 4 bits wide; 256 characters total. Each line is itself made up of
+; 8 rows of pixels, each 16 bytes long. The whole screen is therefore
+; 8 * 16 * 8 = 1024 bytes long.
+; buffer equ $2000
+; framebuffer equ $2108
+; row_offset equ $10
+; line_offset equ $80                    ; A line is a set of 8 16-byte rows.
+ 
+; org 0
+; ld bc,255
+; ld de,buffer
+; ld hl,nonsense
+; ldir
+; ld b,-1 ; Set to -1 to account for increment when subroutine starts
+; call send_buffer_to_framebuffer
+; halt
+
+ 
+ ; The start of the character buffer is stored in 'buffer'. The screen fits 32 * 8 = 256 characters.
 ; The start of the framebuffer is stored in 'framebuffer' and is 1024 bytes long.
 send_buffer_to_framebuffer:
+    ld b,(fb_pointer)
+    inc b                                       ; B contains our counter
+    ld (fb_pointer),b
     ld a,b
     cp $FF                                      ; Have we hit 256 characters yet?
     jp z,send_buffer_to_framebuffer_done        ; Yes: end loop
+    
+    ; Calculate the line offset for this character location
+    srl a                                       ; Divide A by 32 (characters per line)
+    srl a
+    srl a
+    srl a
+    srl a
+    add a,a                                     ; Multiply A by 2 - Why do we do this?
+    ld ix,address_lut
+    ld d,0
+    ld e,a
+    add ix,de
+    ld l,(ix)                                   ; The offset is in HL
+    ld h,(ix+1)
+    ld (fb_offset),hl                           ; Store the offset in RAM
+    
+    ; Calculate the character start address
     ld d,0                                      
     ld e,b
     ld hl,buffer 
     add hl,de
     ld a,(hl)                                   ; Character at this buffer position is now in A
+    
+    ; Check for ASCII control characters
+    cp a,0                                      ; Is the character a null terminator (end of buffer)?
+    jp z,send_buffer_to_framebuffer_done        ; Stop processing, there's no more text in the buffer
+    cp a,$0A                                    ; Is the character a newline?
+    jp z,framebuffer_write_newline
+
+    ; This is a text character in the range $20 - $7E, so we print it
     sub $20                                     ; To account for font starting at ASCII $20
-    add a,a                                     ; Multiply by 6 to account for cols * chars
-    add a,a
-    add a,a
-    add a,a
-    add a,a
+    ld h,0                                      ; Multiply index by 6 (font has 6 columns)
+    ld l,a
+    add hl,hl                                   ; HL * 2
+    ld e,l                                      ; HL * 2 --> DE
+    ld d,h
+    add hl,hl                                   ; HL * 4
+    add hl,de                                   ; HL * 4 + HL * 2 = HL * 6
+    ld (char_offset),hl                         ; Store the character start address in RAM
+    
+    ; Loop through the rows of the character, loading them into the buffer
     ld c,0                                      ; We use C to store the row index
     send_buffer_to_framebuffer_row_loop:
-        push af
         ld a,c
-        cp 5                                    ; Have we processed 6 rows?
+        cp 6                                    ; Have we processed 6 rows?
         jp z,send_buffer_to_framebuffer         ; Yes: start on the next character
-        pop af                                  ; No: process the next row
-        add a,c                                 ; Add C to get the row we're currently at
-        ld d,0                                  ; Put offset index into DE
-        ld e,a
+        
+        push bc                                 ; No: process the next row
+        ld b,0
+        ld hl,(char_offset)
+        add hl,bc                               ; Add C to get the row we're currently at
+        ld de,hl                                ; Put offset index into DE
         ld hl,font                              ; Put start address of font into HL
         add hl,de                               ; HL contains our row byte index
         ld a,(hl)                               ; A contains our row byte!
+        cp 0                                    ; Is A == 0? If so, we can skip this entire row
+        jp z,row_loop_skip
+        pop bc
         push af
         ld a,b                                  ; Check B...
         rrca                                    ; Is B even or odd? Odd if there's a carry.
-        jp nc,row_loop_2                        ; Even: doesn't need rotating
+        jp c,row_loop_2                         ; Odd: doesn't need rotating
         pop af
-        rlca                                    ; Odd: needs rotating. Rotate left 4 bits
+        rlca                                    ; Even: needs rotating. Rotate left 4 bits
         rlca
         rlca
-        rlca
-        ld l,0
-        or l                                    ; L now contains the top four bits of the 2-character row
+        rlca                                    ; A now contains the top four bits of the 2-character row
+        push af
+        push bc
+        srl b                                   ; Divide B by 2
+        ld a,b                                  ; Subtract from B to get it back down
+                                                ; to the range 0 > F
+        subtraction_loop_1:
+            sub $10
+            jp nc,subtraction_loop_1
+        add a,$10
+        ld h,0
+        ld l,a
+        ld d,0
+        ld e,row_offset
+        ld b,c
+        inc b
+        multiply_loop_1:
+            add hl,de
+            djnz multiply_loop_1
+        ld a,l
+        sub row_offset
+        ld l,a
+        ld de,hl                                ; Our total row offset is in DE
+        ld hl,framebuffer                       ; ...add the framebuffer start address
+        add hl,de
+        ld de,hl
+        ld hl,(fb_offset)                       ; ...add the line offset
+        add hl,de                               ; This is where we write the byte!
+        pop bc
+        pop af
+        ld (hl),a                              ; (HL) now contains the top four bits
         inc c
         jp send_buffer_to_framebuffer_row_loop
     row_loop_2:
-        pop af 
-        or l 
+        push bc
+        srl b                                   ; Divide B by 2
+        ld a,b                                  ; Subtract from B to get it back down
+                                                ; to the range 0 > F
+        subtraction_loop_2:
+            sub $10
+            jp nc,subtraction_loop_2
+        add a,$10
+        ld b,a
+        ld h,0
+        ld l,b
+        ld d,0
+        ld e,row_offset
+        ld b,c
+        inc b
+        multiply_loop_2:
+            add hl,de
+            djnz multiply_loop_2
+        ld a,l
+        sub row_offset
+        ld l,a
+        ld de,hl                                ; Our total row offset is in DE
+        ld hl,framebuffer                       ; ...add the framebuffer start address
+        add hl,de
+        ld de,hl
+        ld hl,(fb_offset)                       ; ...add the line offset
+        add hl,de                               ; This is where we write the byte!
+        ld d,0
+        ld e,b
+        add hl,de                               ; Add our column (character) offset
+        ld a,(hl)                               ; A now contains the current saved bits (MSB)
+        ld e,a
+        pop bc
+        pop af
+        or e                                    ; Combine A and E
+        ld (hl),a                              ; (HL) now contains the bottom four bits
         inc c
         jp send_buffer_to_framebuffer_row_loop
-    inc b                                       ; B contains our counter
+    row_loop_skip:
+        pop bc                                  ; Restore B (character counter)
+        inc c
+        jp send_buffer_to_framebuffer_row_loop
+    send_buffer_to_framebuffer_done:
+        ret
 
+; Write a newline into the framebuffer. A newline is:
+; - A set of empty bytes (00) to the end of the current character line
+; - An increment of the framebuffer pointer to continue 
+framebuffer_write_newline:
+     
+
+; A lookup table mapping rows on the console to memory location offsets
+; in the framebuffer.
+address_lut:
+    dw 0,0x100,0x200,0x300,0x80,0x180,0x280,0x380
+
+; 6 row by 4 column font (6 x 3 real font size)
 font:
     db 0x00, 0x00, 0x00, 0x00, 0x00, 0x00  ; [space]
     db 0x04, 0x04, 0x04, 0x00, 0x04, 0x00  ; !
@@ -234,32 +345,32 @@ font:
     db 0x08, 0x04, 0x02, 0x04, 0x08, 0x00  ; >
     db 0x0E, 0x02, 0x04, 0x00, 0x04, 0x00  ; ?
     db 0x04, 0x0A, 0x0A, 0x08, 0x06, 0x00  ; @
-    db 0x04, 0x0A, 0x0E, 0x0A, 0x0A, 0x00  ; a
-    db 0x0C, 0x0A, 0x0C, 0x0A, 0x0C, 0x00  ; b
-    db 0x06, 0x08, 0x08, 0x08, 0x06, 0x00  ; c
-    db 0x0C, 0x0A, 0x0A, 0x0A, 0x0C, 0x00  ; d
-    db 0x0E, 0x08, 0x0E, 0x08, 0x0E, 0x00  ; e
-    db 0x0E, 0x08, 0x0E, 0x08, 0x08, 0x00  ; f
-    db 0x06, 0x08, 0x0E, 0x0A, 0x06, 0x00  ; g
-    db 0x0A, 0x0A, 0x0E, 0x0A, 0x0A, 0x00  ; h
-    db 0x0E, 0x04, 0x04, 0x04, 0x0E, 0x00  ; i
-    db 0x06, 0x02, 0x02, 0x0A, 0x04, 0x00  ; j
-    db 0x0A, 0x0A, 0x0C, 0x0A, 0x0A, 0x00  ; k
-    db 0x08, 0x08, 0x08, 0x08, 0x0E, 0x00  ; l
-    db 0x0A, 0x0E, 0x0A, 0x0A, 0x0A, 0x00  ; m
-    db 0x0C, 0x0A, 0x0A, 0x0A, 0x0A, 0x00  ; n
-    db 0x04, 0x0A, 0x0A, 0x0A, 0x04, 0x00  ; o
-    db 0x0C, 0x0A, 0x0C, 0x08, 0x08, 0x00  ; p
-    db 0x04, 0x0A, 0x0A, 0x0A, 0x06, 0x00  ; q
-    db 0x0C, 0x0A, 0x0C, 0x0A, 0x0A, 0x00  ; r
-    db 0x06, 0x08, 0x04, 0x02, 0x0C, 0x00  ; s
-    db 0x0E, 0x04, 0x04, 0x04, 0x04, 0x00  ; t
-    db 0x0A, 0x0A, 0x0A, 0x0A, 0x06, 0x00  ; u
-    db 0x0A, 0x0A, 0x0A, 0x0A, 0x04, 0x00  ; v
-    db 0x0A, 0x0A, 0x0A, 0x0E, 0x0A, 0x00  ; w
-    db 0x0A, 0x0A, 0x04, 0x0A, 0x0A, 0x00  ; x
-    db 0x0A, 0x0A, 0x04, 0x04, 0x04, 0x00  ; y
-    db 0x0E, 0x02, 0x04, 0x08, 0x0E, 0x00  ; z
+    db 0x04, 0x0A, 0x0E, 0x0A, 0x0A, 0x00  ; A
+    db 0x0C, 0x0A, 0x0C, 0x0A, 0x0C, 0x00  ; B
+    db 0x06, 0x08, 0x08, 0x08, 0x06, 0x00  ; C
+    db 0x0C, 0x0A, 0x0A, 0x0A, 0x0C, 0x00  ; D
+    db 0x0E, 0x08, 0x0E, 0x08, 0x0E, 0x00  ; E
+    db 0x0E, 0x08, 0x0E, 0x08, 0x08, 0x00  ; F
+    db 0x06, 0x08, 0x0E, 0x0A, 0x06, 0x00  ; G
+    db 0x0A, 0x0A, 0x0E, 0x0A, 0x0A, 0x00  ; H
+    db 0x0E, 0x04, 0x04, 0x04, 0x0E, 0x00  ; I
+    db 0x06, 0x02, 0x02, 0x0A, 0x04, 0x00  ; J
+    db 0x0A, 0x0A, 0x0C, 0x0A, 0x0A, 0x00  ; K
+    db 0x08, 0x08, 0x08, 0x08, 0x0E, 0x00  ; L
+    db 0x0A, 0x0E, 0x0A, 0x0A, 0x0A, 0x00  ; M
+    db 0x0C, 0x0A, 0x0A, 0x0A, 0x0A, 0x00  ; N
+    db 0x04, 0x0A, 0x0A, 0x0A, 0x04, 0x00  ; O
+    db 0x0C, 0x0A, 0x0C, 0x08, 0x08, 0x00  ; P
+    db 0x04, 0x0A, 0x0A, 0x0A, 0x06, 0x00  ; Q
+    db 0x0C, 0x0A, 0x0C, 0x0A, 0x0A, 0x00  ; R
+    db 0x06, 0x08, 0x04, 0x02, 0x0C, 0x00  ; S
+    db 0x0E, 0x04, 0x04, 0x04, 0x04, 0x00  ; T
+    db 0x0A, 0x0A, 0x0A, 0x0A, 0x06, 0x00  ; U
+    db 0x0A, 0x0A, 0x0A, 0x0A, 0x04, 0x00  ; V
+    db 0x0A, 0x0A, 0x0A, 0x0E, 0x0A, 0x00  ; W
+    db 0x0A, 0x0A, 0x04, 0x0A, 0x0A, 0x00  ; X
+    db 0x0A, 0x0A, 0x04, 0x04, 0x04, 0x00  ; Y
+    db 0x0E, 0x02, 0x04, 0x08, 0x0E, 0x00  ; Z
     db 0x06, 0x04, 0x04, 0x04, 0x06, 0x00  ; [
     db 0x08, 0x08, 0x04, 0x02, 0x02, 0x00  ; \
     db 0x0C, 0x04, 0x04, 0x04, 0x0C, 0x00  ; ]
