@@ -45,12 +45,14 @@ setup:
 
     ld (fb_pointer),-1                  ; To account for increment when subroutine starts
     call send_buffer_to_framebuffer
+    call lcd_send_buffer
 
 main_loop:
     halt
     jp main_loop
 
 send_buffer_to_framebuffer_done:
+    call lcd_send_buffer
     jp main_loop
 
 
@@ -77,4 +79,4 @@ string_length:
 ; Data
 ; -----------------------------------------------------------------------------
 welcome_message:
-    db "HEX-80 ready",0
+    db "HEX-80 ready",$0A,"> ",0

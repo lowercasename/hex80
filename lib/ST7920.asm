@@ -99,33 +99,6 @@ buffer_write_string:
     ldir
     ret
 
-; Write an ASCII character in A to the position in HL (0 - 1024).
-; buffer_write_char:
-;     push hl
-;     ld b,font_width
-;     buffer_write_char_loop_cols:
-;         ; A contains the character code
-;         sub $20                         ; Subtract $20 to account for the font starting at $20
-;         add a,a                         ; Multiply by 3 to account for cols * chars
-;         add a,a
-;         add a,b                         ; Add B to get the column we're currently at
-;         dec a                           ; Decrease by 1 (column 1 is 0)
-;         ld d,0                          ; Put index into DE
-;         ld e,a
-;         ld hl,font                      ; Put start address of font into HL
-;         add hl,de                       ; HL contains our column byte index
-;         ld a,(hl)                       ; A contains our column byte!
-;         push bc
-;         ld b,font_height                ; Put our font height into B to loop through rows
-;         rlca                            ; Assuming font height is 6, shift twice to prepare
-;         rlca
-;         buffer_write_char_loop_rows:
-;              dec b                      ; Decrease B by 1 (to loop this routine font_height times)
-;              rlca                       ; Drop the leftmost bit into the carry flag
-;              jr nc,buffer_write_char_loop_rows ; Bit not set - check next row
-;              call buffer_set_bit
-;         djnz buffer_write_char_loop_cols
-
 ; The framebuffer comprises 8 32-character lines, where each character
 ; is 4 bits wide; 256 characters total. Each line is itself made up of
 ; 8 rows of pixels, each 16 bytes long. The whole screen is therefore
@@ -305,9 +278,6 @@ send_buffer_to_framebuffer:
 
 ; Write a newline into the framebuffer. A newline is:
 ; - A set of empty bytes (00) to the end of the current character line
-; - An increment of the framebuffer pointer to continue 
-; Write a newline into the framebuffer. A newline is:
-; - A set of empty bytes (00) to the end of the current character line
 ; - An increment of the framebuffer pointer to put the next character of the buffer
 ;   onto the first location of the next line
 framebuffer_write_newline:
@@ -356,6 +326,35 @@ framebuffer_write_newline:
     dec a                                       ; Decrement by 1 (to account for increment at loop start)
     ld (fb_pointer),a                           ; Save new counter to RAM
     jp send_buffer_to_framebuffer               ; Process the next character!
+
+; Y coordinate = D
+; X coordinate = E
+lcd_send_buffer:
+    ld hl,framebuffer
+    ld d,-1                                     ; Set Y coordinate to account for increment
+    lcd_send_row:
+        inc d                                   ; Increment Y coordinate
+        ld a,d
+        or $80                                  ; Send Y coordinate
+        call lcd_send_command
+        ld a,$80                                ; Reset and send X coordinate (this is a new row)
+        call lcd_send_command
+        ld e,0                                  ; E is our byte counter
+        lcd_send_row_inner:
+            ld a,(hl)
+            call lcd_send_data
+            inc hl
+            ld a,(hl)
+            call lcd_send_data
+            inc hl
+            inc e
+            ld a,e
+            cp $f                               ; Has our byte counter (X coordinate) hit 15?
+            jr nz,lcd_send_row_inner            ; No: run the next row
+        ld a,d
+        cp $1f                                  ; Has our row counter (Y coordinate) hit 31?
+        jr nz,lcd_send_row                      ; No: run the next line
+        ret                                     ; Yes: return from subroutine
 
 ; A lookup table mapping rows on the console to memory location offsets
 ; in the framebuffer.
