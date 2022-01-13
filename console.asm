@@ -2,8 +2,6 @@
 ; -----------------------------------------------------------------------------
 lcd_command     equ $00                 ; LCD command I/O port (Y0.0)
 lcd_data        equ $01                 ; LCD data I/O port (Y0.1)
-kb_high_byte    equ $20                 ; I/O port for high byte of PS/2 buffer
-kb_low_byte     equ $40                 ; I/O port for low byte of PS/2 buffer
 ps2_command     equ $20                 ; Arduino PS/2 interface port (Y1)
 row_offset      equ $10                 ; 1 framebuffer row = 16 bytes (32 4-bit characters)
 
@@ -19,6 +17,8 @@ fb_offset       equ $4002               ; The offset for a particular buffer loc
 char_offset     equ $4004               ; The start address of the current framebuffer character (2 bytes)
 cmd_buffer_pointer equ $4006            ; The current location in the command buffer (1 byte)
 fb_pointer      equ $4008               ; The current location in the framebuffer (2 bytes)
+remaining_bytes equ $4010               ; A counter of remaining bytes in a particular line (1 byte)
+row_end         equ $4012               ; The end location of the current row (2 bytes)
 
 org $0                                  ; Z80 starts reading here so we send it to the right location
     jp setup
@@ -32,6 +32,7 @@ setup:
     ; Reset memory
     ld hl,0
     ld (buffer_pointer),hl
+    ld (fb_pointer),hl
     ld ix,0
     call buffer_clear
     
@@ -47,6 +48,9 @@ setup:
 
 main_loop:
     halt
+    jp main_loop
+
+send_buffer_to_framebuffer_done:
     jp main_loop
 
 

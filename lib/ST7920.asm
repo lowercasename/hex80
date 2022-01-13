@@ -143,19 +143,20 @@ buffer_write_string:
 ; ld b,-1 ; Set to -1 to account for increment when subroutine starts
 ; call send_buffer_to_framebuffer
 ; halt
-
  
- ; The start of the character buffer is stored in 'buffer'. The screen fits 32 * 8 = 256 characters.
+; The start of the character buffer is stored in 'buffer' and is 1024 bytes long,
+; although the screen fits only 32 * 8 = 256 characters.
 ; The start of the framebuffer is stored in 'framebuffer' and is 1024 bytes long.
 send_buffer_to_framebuffer:
-    ld b,(fb_pointer)
-    inc b                                       ; B contains our counter
-    ld (fb_pointer),b
-    ld a,b
+    ld a,(fb_pointer)
+    inc a                                       ; Increment the framebuffer pointer
+    ld (fb_pointer),a
     cp $FF                                      ; Have we hit 256 characters yet?
     jp z,send_buffer_to_framebuffer_done        ; Yes: end loop
     
-    ; Calculate the line offset for this character location
+    ; Calculate the line offset for the current framebuffer location (this may not be the
+    ; same as the line offset for the current _character_ buffer location as newlines will
+    ; take the two buffer pointers out of sync with each other.)
     srl a                                       ; Divide A by 32 (characters per line)
     srl a
     srl a
@@ -171,6 +172,10 @@ send_buffer_to_framebuffer:
     ld (fb_offset),hl                           ; Store the offset in RAM
     
     ; Calculate the character start address
+    ld a,(buffer_pointer)
+    inc a                                       ; Always increment the buffer pointer
+    ld (buffer_pointer),a
+    ld b,a                                      ; B now contains our buffer pointer
     ld d,0                                      
     ld e,b
     ld hl,buffer 
@@ -178,12 +183,13 @@ send_buffer_to_framebuffer:
     ld a,(hl)                                   ; Character at this buffer position is now in A
     
     ; Check for ASCII control characters
-    cp a,0                                      ; Is the character a null terminator (end of buffer)?
+    cp 0                                        ; Is the character a null terminator (end of buffer)?
     jp z,send_buffer_to_framebuffer_done        ; Stop processing, there's no more text in the buffer
-    cp a,$0A                                    ; Is the character a newline?
+    cp $0A                                      ; Is the character a newline?
     jp z,framebuffer_write_newline
 
-    ; This is a text character in the range $20 - $7E, so we print it
+    ; This is a regular ASCII character in the range $20 - $7E, so we get its start address from the
+    ; font table
     sub $20                                     ; To account for font starting at ASCII $20
     ld h,0                                      ; Multiply index by 6 (font has 6 columns)
     ld l,a
@@ -195,12 +201,13 @@ send_buffer_to_framebuffer:
     ld (char_offset),hl                         ; Store the character start address in RAM
     
     ; Loop through the rows of the character, loading them into the buffer
+    ld a,(fb_pointer)                           ; Get our framebuffer pointer into B
+    ld b,a
     ld c,0                                      ; We use C to store the row index
     send_buffer_to_framebuffer_row_loop:
         ld a,c
         cp 6                                    ; Have we processed 6 rows?
         jp z,send_buffer_to_framebuffer         ; Yes: start on the next character
-        
         push bc                                 ; No: process the next row
         ld b,0
         ld hl,(char_offset)
@@ -209,12 +216,13 @@ send_buffer_to_framebuffer:
         ld hl,font                              ; Put start address of font into HL
         add hl,de                               ; HL contains our row byte index
         ld a,(hl)                               ; A contains our row byte!
-        cp 0                                    ; Is A == 0? If so, we can skip this entire row
-        jp z,row_loop_skip
+        ; DEBUG - this will only work if the entire framebuffer is empty first 
+        ;cp 0                                    ; Is A == 0? If so, we can skip this entire row
+        ;jp z,row_loop_skip
         pop bc
         push af
-        ld a,b                                  ; Check B...
-        rrca                                    ; Is B even or odd? Odd if there's a carry.
+        ld a,b                                  ; Check the framebuffer pointer...
+        rrca                                    ; Is it even or odd? Odd if there's a carry.
         jp c,row_loop_2                         ; Odd: doesn't need rotating
         pop af
         rlca                                    ; Even: needs rotating. Rotate left 4 bits
@@ -224,8 +232,7 @@ send_buffer_to_framebuffer:
         push af
         push bc
         srl b                                   ; Divide B by 2
-        ld a,b                                  ; Subtract from B to get it back down
-                                                ; to the range 0 > F
+        ld a,b                                  ; Subtract from B to get it back down to the range 0 > F
         subtraction_loop_1:
             sub $10
             jp nc,subtraction_loop_1
@@ -247,17 +254,16 @@ send_buffer_to_framebuffer:
         add hl,de
         ld de,hl
         ld hl,(fb_offset)                       ; ...add the line offset
-        add hl,de                               ; This is where we write the byte!
+        add hl,de                               ; HL is where we write the byte!
         pop bc
         pop af
-        ld (hl),a                              ; (HL) now contains the top four bits
-        inc c
+        ld (hl),a                               ; (HL) now contains the top four bits
+        inc c                                   ; Set C to the next row of the character
         jp send_buffer_to_framebuffer_row_loop
     row_loop_2:
         push bc
         srl b                                   ; Divide B by 2
-        ld a,b                                  ; Subtract from B to get it back down
-                                                ; to the range 0 > F
+        ld a,b                                  ; Subtract from B to get it back down to the range 0 > F
         subtraction_loop_2:
             sub $10
             jp nc,subtraction_loop_2
@@ -280,7 +286,7 @@ send_buffer_to_framebuffer:
         add hl,de
         ld de,hl
         ld hl,(fb_offset)                       ; ...add the line offset
-        add hl,de                               ; This is where we write the byte!
+        add hl,de                               ; HL is where we write the byte!
         ld d,0
         ld e,b
         add hl,de                               ; Add our column (character) offset
@@ -289,21 +295,67 @@ send_buffer_to_framebuffer:
         pop bc
         pop af
         or e                                    ; Combine A and E
-        ld (hl),a                              ; (HL) now contains the bottom four bits
-        inc c
+        ld (hl),a                               ; (HL) now contains the bottom four bits
+        inc c                                   ; Set C to the next row of the character
         jp send_buffer_to_framebuffer_row_loop
     row_loop_skip:
         pop bc                                  ; Restore B (character counter)
         inc c
         jp send_buffer_to_framebuffer_row_loop
-    send_buffer_to_framebuffer_done:
-        ret
 
 ; Write a newline into the framebuffer. A newline is:
 ; - A set of empty bytes (00) to the end of the current character line
 ; - An increment of the framebuffer pointer to continue 
+; Write a newline into the framebuffer. A newline is:
+; - A set of empty bytes (00) to the end of the current character line
+; - An increment of the framebuffer pointer to put the next character of the buffer
+;   onto the first location of the next line
 framebuffer_write_newline:
-     
+    push bc 
+    ld c,0                                      ; Clear C (we use it ourselves here)
+    srl b                                       ; Divide B by 2 (2 characters per byte)
+    ld a,b                                      ; Subtract from B to get it back down to the range 0 > F
+    newline_subtraction_loop:
+        sub $10
+        jp nc,newline_subtraction_loop
+    add a,$10
+    ld b,a
+    ld a,$f                                     ; Number of bytes in a line - 1
+    sub b                                       ; Our counter of remaining bytes in the line is now in A
+    ld (remaining_bytes),a                      ; Save it to RAM
+    ld hl,framebuffer                           ; Load framebuffer start address into DE
+    ld de,hl
+    ld hl,(fb_offset)                           ; Load line offset into HL
+    add hl,de                                   ; HL now contains the start of our current row
+    ld d,0
+    ld e,$f                                     ; DE now contains the number of bytes per row
+    add hl,de                                   ; Bytes per row + start of row = end of row
+    ld (row_end),hl                            ; Save that index to RAM
+    ld b,6                                      ; Do the following 6 times (6 rows)
+    zero_fill_loop:
+        ld a,(remaining_bytes)                  ; Reset A (our byte counter)
+        ; Do the following as many times as remaining bytes in the line (stored in A)
+        zero_fill_loop_inner:
+            ld (hl),0                           ; Clear this byte
+            dec hl                              ; Move to previous byte
+            dec a                               ; Decrement byte counter
+            cp $ff                              ; Have we run A times?
+            jp nz,zero_fill_loop_inner          ; Loop back until A hits 0
+        ld hl,(row_end)
+        ld d,0
+        ld e,row_offset                         ; Increment by row offset
+        add hl,de                               ; Move to the next row (by adding offset)
+        ld (row_end)                            ; Save this as the new row end
+        djnz zero_fill_loop                     ; Start again on next row of line
+    pop bc
+    ld a,(remaining_bytes)                      ; Get number of zeroed bytes into A
+    ld e,a                                      ; Move it into E
+    ld a,(fb_pointer)
+    add a,e                                     ; Increment framebuffer pointer by number of skipped bytes
+    add a,a                                     ; Double it (two characters per byte!)
+    dec a                                       ; Decrement by 1 (to account for increment at loop start)
+    ld (fb_pointer),a                           ; Save new counter to RAM
+    jp send_buffer_to_framebuffer               ; Process the next character!
 
 ; A lookup table mapping rows on the console to memory location offsets
 ; in the framebuffer.
