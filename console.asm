@@ -23,28 +23,30 @@ row_end         equ $4012               ; The end location of the current row (2
 org $0                                  ; Z80 starts reading here so we send it to the right location
     jp setup
 
+org $100
 setup:
     ld sp,ram_top                       ; Initialize the stack pointer at the top of RAM
 
-    im 1                                ; Set interrupt mode 1 (go to $0038 on interrupt)
-    ei                                  ; Enable interrupts
+    ; im 1                                ; Set interrupt mode 1 (go to $0038 on interrupt)
+    ; ei                                  ; Enable interrupts
 
     ; Reset memory
     ld hl,0
     ld (buffer_pointer),hl
     ld (fb_pointer),hl
     ld ix,0
-    call buffer_clear
+    call buffer_fill
     
     call lcd_initialise                 ; Setup LCD display
     
-    ld hl,welcome_message               ; Place welcome message into buffer
-    call string_length                  ; Get length of HL string into BC
-    ld hl,welcome_message               ; Place welcome message into buffer
-    call buffer_write_string            ; Write string into buffer
+    ; ld hl,welcome_message               ; Place welcome message into buffer
+    ; call string_length                  ; Get length of HL string into BC
+    ; ld hl,welcome_message               ; Place welcome message into buffer
+    ; call buffer_write_string            ; Write string into buffer
+    ; ld hl,-1
+    ; ld (fb_pointer),hl                  ; To account for increment when subroutine starts
+    ; call send_buffer_to_framebuffer
 
-    ld (fb_pointer),-1                  ; To account for increment when subroutine starts
-    call send_buffer_to_framebuffer
     call lcd_send_buffer
 
 main_loop:
@@ -80,3 +82,7 @@ string_length:
 ; -----------------------------------------------------------------------------
 welcome_message:
     db "HEX-80 ready",$0A,"> ",0
+    
+include "lib/ST7920.asm"
+
+align 8192                          ; Pad remaining ROM space with $ff
