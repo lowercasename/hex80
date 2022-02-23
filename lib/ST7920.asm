@@ -81,6 +81,15 @@ buffer_clear:
     ldir
     ret
 
+buffer_fill:
+    ld hl,buffer
+    ld de,buffer+1
+    ld bc,$400
+    ld (hl),$ff
+    ldir
+    ret
+
+
 ; Write a string into the buffer. String length + start position should not
 ; exceed the maximum buffer size (1024 bytes).
 ; -----------------------------------------------------------------------------
@@ -315,7 +324,7 @@ framebuffer_write_newline:
         ld d,0
         ld e,row_offset                         ; Increment by row offset
         add hl,de                               ; Move to the next row (by adding offset)
-        ld (row_end)                            ; Save this as the new row end
+        ld (row_end),hl                         ; Save this as the new row end
         djnz zero_fill_loop                     ; Start again on next row of line
     pop bc
     ld a,(remaining_bytes)                      ; Get number of zeroed bytes into A
