@@ -1,8 +1,3 @@
-//#include <stdlib.h>
-//#include <stdio.h>
-//#include <string.h>
-//#include <math.h>
-
 #define BUFFER_WIDTH 256
 #define BUFFER_HEIGHT 32
 #define SCREEN_WIDTH 128
@@ -50,7 +45,7 @@ const unsigned char font[] = {
     0x08, 0x14, 0x22,// <
     0x14, 0x14, 0x14,// =
     0x22, 0x14, 0x08,// >
-    0x20, 0x2A, 0x30,// ?
+    0x20, 0x2A, 0x10,// ?
     0x1C, 0x22, 0x1A,// @
     0x1E, 0x28, 0x1E,// A
     0x3E, 0x2A, 0x14,// B
@@ -227,7 +222,7 @@ void setup() {
   digitalWrite(EN, LOW);
   
   lcd_init();
-//
+
   for (int i = 0x20; i <= 0x7E; i++) {
     printChar(i, i-0x20);
   }
