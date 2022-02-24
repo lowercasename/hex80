@@ -11,7 +11,6 @@ ram_start       equ $2000               ; The lowest address in the RAM
 ram_top         equ $7fff               ; The highest address in the RAM
 buffer          equ $2000               ; The text content of the console buffer (1024 bytes)
 framebuffer     equ $3000               ; The LCD framebuffer (1024 bytes)
-cmd_buffer      equ $5000               ; The current command buffer (255 bytes)
 buffer_pointer  equ $4000               ; The current location in the text buffer (2 bytes)
 fb_offset       equ $4002               ; The offset for a particular buffer location in the framebuffer (2 bytes)
 char_offset     equ $4004               ; The start address of the current framebuffer character (2 bytes)
@@ -19,6 +18,7 @@ cmd_buffer_pointer equ $4006            ; The current location in the command bu
 fb_pointer      equ $4008               ; The current location in the framebuffer (2 bytes)
 remaining_bytes equ $4010               ; A counter of remaining bytes in a particular line (1 byte)
 row_end         equ $4012               ; The end location of the current row (2 bytes)
+cmd_buffer      equ $5000               ; The current command buffer (255 bytes)
 
 org $0                                  ; Z80 starts reading here so we send it to the right location
     jp setup
@@ -34,8 +34,15 @@ setup:
     ld hl,0
     ld (buffer_pointer),hl
     ld (fb_pointer),hl
-    ld ix,0
-    call buffer_fill
+    ld (fb_offset),hl
+    ld (char_offset),hl
+    ld (cmd_buffer_pointer),hl
+    ld (remaining_bytes),hl
+    ld (row_end),hl
+    ; ld ix,0
+    ; call buffer_fill
+
+    call framebuffer_fill
     
     call lcd_initialise                 ; Setup LCD display
     
@@ -78,10 +85,32 @@ string_length:
         jp nz,string_length_loop
     ret
         
+delay:
+        push af
+        push bc
+        push de
+        LD BC, $64            ;Loads BC with hex 1000
+        Outer:
+        LD DE, $64            ;Loads DE with hex 1000
+        Inner:
+        DEC DE                  ;Decrements DE
+        LD A, D                 ;Copies D into A
+        OR E                    ;Bitwise OR of E with A (now, A = D | E)
+        JP NZ, Inner            ;Jumps back to Inner: label if A is not zero
+        DEC BC                  ;Decrements BC
+        LD A, B                 ;Copies B into A
+        OR C                    ;Bitwise OR of C with A (now, A = B | C)
+        JP NZ, Outer            ;Jumps back to Outer: label if A is not zero
+        pop de
+        pop bc
+        pop af
+        RET                     ;Return from call to this subroutine
+
 ; Data
 ; -----------------------------------------------------------------------------
 welcome_message:
-    db "HEX-80 ready",$0A,"> ",0
+    ; db "HEX-80 ready",$0A,"> ",0
+    db "Hello world!",0
     
 include "lib/ST7920.asm"
 
