@@ -32,7 +32,6 @@ lcd_send_data:
         rlca                        ; Rotate A left, moving bit 7 into carry flag
         jr c,lcd_send_data_wait     ; Continue looping if carry flag is 1
     pop af                          ; Else, retrieve A
-    call delay
     out (lcd_data),a                ; Output the data byte in A to the lcd_data port
     ret                             ; Return from subroutine
 
@@ -46,7 +45,6 @@ lcd_send_command:
         rlca                        ; Rotate A left, moving bit 7 into carry flag
         jr c,lcd_send_command_wait  ; Continue looping if carry flag is 1
     pop af                          ; Else, retrieve A
-    call delay
     out (lcd_command),a             ; Output the command byte in A to the lcd_command port
     ret                             ; Return from subroutine
 
