@@ -1,13 +1,22 @@
 #include "rom.h"
 
-#define A0 A0
-#define A1 A1
-#define A2 A2
-#define A3 A3
-#define A4 A4
-#define A5 A5
-#define A6 A6
-#define A7 A7
+#include <PS2Keyboard.h>
+
+PS2Keyboard keyboard;
+
+#define AB0 A0
+#define AB1 A1
+#define AB2 A2
+#define AB3 A3
+#define AB4 A4
+#define AB5 A5
+#define AB6 A6
+#define AB7 A7
+#define AB8 44
+#define AB9 45
+#define AB10 42
+#define AB11 43
+#define AB12 40
 
 #define D0 A8
 #define D1 A9
@@ -24,10 +33,17 @@
 #define MREQ 50
 #define RESET 49
 #define RFSH 48
+#define IOREQ 47
 #define CLOCK 46
+#define INT 22
 
-#define BYTE_TO_BINARY_PATTERN_READ "%c%c%c%c %c%c%c%c [ADDR %02X -> %02X]"
+#define SR_RCK 23
+#define SR_SCK 24
+#define SR_SER 25
+
+#define BYTE_TO_BINARY_PATTERN_READ "%c%c%c%c %c%c%c%c [ADDR %04X -> %02X]"
 #define BYTE_TO_BINARY_PATTERN_WRITE "%c%c%c%c %c%c%c%c [DATA %02X -> ADDR %02X]"
+#define BYTE_TO_BINARY_PATTERN_BASIC "%c%c%c%c %c%c%c%c [%02X]"
 #define BYTE_TO_BINARY(byte)  \
   (byte & 0x80 ? '1' : '0'), \
   (byte & 0x40 ? '1' : '0'), \
@@ -43,10 +59,11 @@ byte RFSH_val = 0;
 byte RD_val = 0;
 byte WR_val = 0;
 byte MEMREQ_val = 0;
+byte IOREQ_val = 0;
 unsigned short addressBus = 0;
 unsigned char dataBus = 0;
 
-short ROM_LENGTH = 256;
+short ROM_LENGTH = 4096;
 
 void performZ80Reset()
 {
@@ -70,23 +87,42 @@ void updateZ80Control()
  RFSH_val = digitalRead(RFSH)==LOW?1:0; 
  RD_val = digitalRead(RD)==LOW?1:0; 
  WR_val = digitalRead(WR)==LOW?1:0; 
- MEMREQ_val = digitalRead(MREQ)==LOW?1:0; 
+ MEMREQ_val = digitalRead(MREQ)==LOW?1:0;
+ IOREQ_val = digitalRead(IOREQ)==LOW?1:0; 
 }
 
 int cycles = 0;
 int MAX_CYCLES = 128;
 
-void setup() {
-  Serial.begin(9600);
+int debug = 0;
+int stopOnHalt = 0;
 
-  pinMode(A0, INPUT);   
-  pinMode(A1, INPUT); 
-  pinMode(A2, INPUT); 
-  pinMode(A3, INPUT); 
-  pinMode(A4, INPUT); 
-  pinMode(A5, INPUT); 
-  pinMode(A6, INPUT); 
-  pinMode(A7, INPUT);
+int currentInterrupt = 0;
+
+char c = 0;
+
+volatile int interrupted = 0;
+
+int ioDebounce = 0;
+
+void setup() {
+  Serial.begin(115200);
+
+  keyboard.begin(20, 21);
+
+  pinMode(AB0, INPUT);   
+  pinMode(AB1, INPUT);
+  pinMode(AB2, INPUT); 
+  pinMode(AB3, INPUT); 
+  pinMode(AB4, INPUT); 
+  pinMode(AB5, INPUT); 
+  pinMode(AB6, INPUT); 
+  pinMode(AB7, INPUT);
+  pinMode(AB8, INPUT); 
+  pinMode(AB9, INPUT); 
+  pinMode(AB10, INPUT); 
+  pinMode(AB11, INPUT); 
+  pinMode(AB12, INPUT);
 
   pinMode(D0, OUTPUT);   
   pinMode(D1, OUTPUT); 
@@ -99,25 +135,69 @@ void setup() {
   
   pinMode(WR, INPUT); 
   pinMode(RD, INPUT);
-  pinMode(MREQ, INPUT); 
+  pinMode(MREQ, INPUT);
+  pinMode(IOREQ, INPUT);
   pinMode(RFSH, INPUT);
   pinMode(M1, INPUT);
 
+  pinMode(INT, OUTPUT);
   pinMode(RESET, OUTPUT);
   pinMode(CLOCK, OUTPUT);
 
+  pinMode(SR_RCK, OUTPUT);
+  pinMode(SR_SCK, OUTPUT);
+  pinMode(SR_SER, OUTPUT);
+
   digitalWrite(RESET, LOW);
   digitalWrite(CLOCK, HIGH);
+  digitalWrite(INT, HIGH);
+
+  pinMode(19, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(19), doInterrupt, FALLING);
 
   Serial.println("==========================");
   Serial.println("| Z80 interface starting |");
-  Serial.println("==========================");
+  Serial.println("='=========================");
 
   performZ80Reset();
 }
 
 void loop() {
-  cycles++;
+  
+  if (interrupted) {
+    Serial.println("Interrupt run!");
+    interrupted = 0;
+    readDataBus();
+    char printBuffer[40];
+    sprintf(printBuffer,
+      BYTE_TO_BINARY_PATTERN_READ,
+      BYTE_TO_BINARY(dataBus),
+      dataBus,
+      dataBus
+    );
+    Serial.print("DATA: ");
+    Serial.println(printBuffer);
+//    dataBus = c;
+//    writeDataBus();
+  }
+  
+  if (keyboard.available()) {
+    
+    // Read the next key
+    c = keyboard.read();
+
+//    Serial.print("Received key: ");
+//    Serial.println(c);
+
+    // Shift the key out to the shift register
+//    digitalWrite(SR_RCK, LOW);
+//    shiftOut(SR_SER, SR_SCK, LSBFIRST, c);
+//    digitalWrite(SR_RCK, HIGH);
+
+    // Trigger the interrupt pin on the Z80 to receive the octal
+    digitalWrite(INT, LOW);
+    currentInterrupt = 1;
+  }
 
   digitalWrite(CLOCK, HIGH);
   
@@ -129,22 +209,32 @@ void loop() {
     return;
   }
 
+  if (currentInterrupt > 0) {
+    
+    if (IOREQ_val && M1_val) // interrupt ack
+    {
+      digitalWrite(INT, HIGH);
+      currentInterrupt = 0;
+    }
+  }
+
   readAddressBus();
 
   if (MEMREQ_val) {
     if (RD_val) {
-
       // Debug
-      char printBuffer[40];
-      sprintf(printBuffer,
-        BYTE_TO_BINARY_PATTERN_READ,
-        BYTE_TO_BINARY(addressBus),
-        addressBus,
-        ROM[addressBus]
-      );
-      Serial.print("RD: ");
-      Serial.println(printBuffer);
-      
+      if (debug) {
+        char printBuffer[40];
+        sprintf(printBuffer,
+          BYTE_TO_BINARY_PATTERN_READ,
+          BYTE_TO_BINARY(addressBus),
+          addressBus,
+          ROM[addressBus]
+        );
+        Serial.print("ROM RD: ");
+        Serial.println(printBuffer);
+      }
+        
       if (addressBus < ROM_LENGTH) {
           dataBus = ROM[addressBus];
       } else {
@@ -152,48 +242,122 @@ void loop() {
       }
       writeDataBus();
 
-      // Have we HALTed?
-      if (ROM[addressBus] == 0x76) {
-        Serial.println("Z80 halted.");
-        Serial.print(cycles);
-        Serial.println(" cycles run.");
+      if (addressBus == 0x800) {
+        Serial.println("Z80 error!");
 
         printRAM();
-        while(1);
+      }
+
+      if (stopOnHalt) {
+        // Have we HALTed?
+        if (ROM[addressBus] == 0x76) {
+          Serial.println("Z80 halted.");
+  
+          printRAM();
+          while(1);
+        }
       }
     } else if (WR_val) {
       readDataBus();
 
       // Debug
-      char printBuffer[40];
-      sprintf(printBuffer,
-        BYTE_TO_BINARY_PATTERN_WRITE,
-        BYTE_TO_BINARY(dataBus),
-        dataBus,
-        addressBus
-      );
-      Serial.print("WR: ");
-      Serial.println(printBuffer);
+      if (debug) {
+        char printBuffer[40];
+        sprintf(printBuffer,
+          BYTE_TO_BINARY_PATTERN_WRITE,
+          BYTE_TO_BINARY(dataBus),
+          dataBus,
+          addressBus
+        );
+        Serial.print("ROM WR: ");
+        Serial.println(printBuffer);
+      }
       
       if (addressBus < ROM_LENGTH) {
         ROM[addressBus] = dataBus;
       }
     }
   }
-  delay(10);
+  else if (IOREQ_val && (ioDebounce == 0) && !M1_val) {
+    ioDebounce = 1;
+    unsigned short portAddress = addressBus & 0x00FF;
+    if (WR_val) {
+      readDataBus();
+      // Debug
+      if (debug) {
+        char printBuffer[40];
+        sprintf(printBuffer,
+          BYTE_TO_BINARY_PATTERN_WRITE,
+          BYTE_TO_BINARY(dataBus),
+          dataBus,
+          portAddress
+        );
+        Serial.print("IO  WR: ");
+        Serial.println(printBuffer);
+      }
+    }
+//    else if (RD_val) {
+//      readDataBus();
+//      // Debug
+//      if (debug) {
+//        char printBuffer[40];
+//        sprintf(printBuffer,
+//          BYTE_TO_BINARY_PATTERN_READ,
+//          BYTE_TO_BINARY(portAddress),
+//          portAddress,
+//          dataBus
+//        );
+//        Serial.print("IO  RD: ");
+//        Serial.println(printBuffer);
+//      }
+//    }
+  } else
+  {
+    // to deal with cycle timings (figure 7, timing, z80 manual)
+    if (ioDebounce > 0)
+    {
+      ioDebounce++;
+      if (ioDebounce >= 3)
+      {
+        // IO data _might_ be here?
+        readDataBus();
+        char printBuffer[40];
+        sprintf(printBuffer,
+          BYTE_TO_BINARY_PATTERN_BASIC,
+          BYTE_TO_BINARY(dataBus),
+          dataBus
+        );
+        Serial.print("IO  RD: ");
+        Serial.println(printBuffer);
+        ioDebounce = 0;
+      }
+    }
+  }
+//  delay(100);
   digitalWrite(CLOCK, LOW);
+  
+  cycles++;
+
+//  if (cycles % 100000 == 0) {
+//    printRAM();
+//  }
 }
 
 void readAddressBus() {
   addressBus = 0;
-  addressBus |= ((digitalRead(A0)==HIGH)?1:0)<<0;
-  addressBus |= ((digitalRead(A1)==HIGH)?1:0)<<1;
-  addressBus |= ((digitalRead(A2)==HIGH)?1:0)<<2;
-  addressBus |= ((digitalRead(A3)==HIGH)?1:0)<<3;
-  addressBus |= ((digitalRead(A4)==HIGH)?1:0)<<4;
-  addressBus |= ((digitalRead(A5)==HIGH)?1:0)<<5;
-  addressBus |= ((digitalRead(A6)==HIGH)?1:0)<<6;
-  addressBus |= ((digitalRead(A7)==HIGH)?1:0)<<7;
+  addressBus |= ((digitalRead(AB0)==HIGH)?1:0)<<0;
+  addressBus |= ((digitalRead(AB1)==HIGH)?1:0)<<1;
+  addressBus |= ((digitalRead(AB2)==HIGH)?1:0)<<2;
+  addressBus |= ((digitalRead(AB3)==HIGH)?1:0)<<3;
+  addressBus |= ((digitalRead(AB4)==HIGH)?1:0)<<4;
+  addressBus |= ((digitalRead(AB5)==HIGH)?1:0)<<5;
+  addressBus |= ((digitalRead(AB6)==HIGH)?1:0)<<6;
+  addressBus |= ((digitalRead(AB7)==HIGH)?1:0)<<7;
+  addressBus |= ((digitalRead(AB8)==HIGH)?1:0)<<8;
+  addressBus |= ((digitalRead(AB9)==HIGH)?1:0)<<9;
+  addressBus |= ((digitalRead(AB10)==HIGH)?1:0)<<10;
+  addressBus |= ((digitalRead(AB11)==HIGH)?1:0)<<11;
+  addressBus |= ((digitalRead(AB12)==HIGH)?1:0)<<12;
 }
 
 void readDataBus() {
@@ -245,7 +409,7 @@ void printRAM() {
     if (i % 16 == 0) {
       char lineStartBuffer[3];
       sprintf(lineStartBuffer,
-        "[%02X] ",
+        "[%04X] ",
         i
       );
       Serial.print(lineStartBuffer);
@@ -269,4 +433,8 @@ void printRAM() {
       Serial.println();
     }
   }
+}
+
+void doInterrupt() {
+  interrupted = 1;
 }
