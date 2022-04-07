@@ -9,8 +9,13 @@ sio_a_control  equ     $21      ; 0  0  1  0  0  0  0   1
 sio_b_data     equ     $22      ; 0  0  1  0  0  0  1   0
 sio_b_control  equ     $23      ; 0  0  1  0  0  0  1   1
 
-port_c_data     equ     $40
-port_c_control  equ     $41
+; PIO port B (LCD control port)
+; 7     6       5       4       3       2       1       0
+; x     x       x       R/W     RS      CS2     CS1     E
+; x     x       x       H/L     D/I H/L H       H       H
+
+; port_c_data     equ     $40
+; port_c_control  equ     $41
 
 lcd_e_bit       equ 0
 lcd_rs_bit      equ 3
@@ -20,108 +25,155 @@ cmd_buffer_ptr  equ $2002        ; 1 byte ($00 -> $ff)
 char            equ $2004        ; 1 byte
 cmd_buffer      equ $2006        ; 256 bytes ($2006 -> $2106)
 
-org $0                                  ; Z80 starts reading here so we send it to the right location
+org $00
+reset:
     jp setup
 
-org $0038
-    ; Interrupt setup
-    di                              ; Disable interrupts
-    ex af,af'                       ; Save register states
-    exx                             ; Save register states
+interrupt_vectors:
+    org $0C
+    defw ps2_char_available
+    org $0E
+    defw ps2_special_condition
 
-    ; PARSE CHARACTER
-    in a,(port_c_data)              ; Read what's on the data bus once Y2 is brought low
-                                    ; The ASCII character code is now in A
-    ld (char),a
+; org $0038
+;     ; Interrupt setup
+;     di                              ; Disable interrupts
+;     ex af,af'                       ; Save register states
+;     exx                             ; Save register states
 
-    cp $7F                          ; Is it a backspace character?
-    jp z,cursor_backspace
+;     ; PARSE CHARACTER
+;     in a,(port_c_data)              ; Read what's on the data bus once Y2 is brought low
+;                                     ; The ASCII character code is now in A
+;     ld (char),a
 
-    cp $0A                              ; Is it a new line character?
-    jp z,console_process_cmd
-    cp $0D                              ; Is it a new line character?
-    jp z,console_process_cmd
+;     cp $7F                          ; Is it a backspace character?
+;     jp z,cursor_backspace
 
-    ; cp $20                              ; Is it a regular ASCII character (greater than or equal to [space])?
-    ; jp c,exit_interrupt                 ; If not, bail here.
-    ld de,(cursor_xy)                   ; If yes, print it!
-    call lcd_send_char
-    call cursor_inc
+;     cp $0A                              ; Is it a new line character?
+;     jp z,console_process_cmd
+;     cp $0D                              ; Is it a new line character?
+;     jp z,console_process_cmd
 
-    ; Save character to command buffer
-    ld a,(cmd_buffer_ptr)
-    ld hl,cmd_buffer
-    ld d,0
-    ld e,a
-    add hl,de
-    ld a,(char)
-    ld (hl),a
-    ; Increment the command buffer pointer once done
-    ld a,(cmd_buffer_ptr)
-    inc a
-    ld (cmd_buffer_ptr),a
+;     ; cp $20                              ; Is it a regular ASCII character (greater than or equal to [space])?
+;     ; jp c,exit_interrupt                 ; If not, bail here.
+;     ld de,(cursor_xy)                   ; If yes, print it!
+;     call lcd_send_char
+;     call cursor_inc
 
-    exit_interrupt:
-        ; Interrupt setdown
-        exx                         ; Restore register states
-        ex af,af'                   ; Restore register states
-        ei                          ; Enable interrupts
-        ret
+;     ; Save character to command buffer
+;     ld a,(cmd_buffer_ptr)
+;     ld hl,cmd_buffer
+;     ld d,0
+;     ld e,a
+;     add hl,de
+;     ld a,(char)
+;     ld (hl),a
+;     ; Increment the command buffer pointer once done
+;     ld a,(cmd_buffer_ptr)
+;     inc a
+;     ld (cmd_buffer_ptr),a
+
+;     exit_interrupt:
+;         ; Interrupt setdown
+;         exx                         ; Restore register states
+;         ex af,af'                   ; Restore register states
+;         ei                          ; Enable interrupts
+;         ret
 
 org $100
 setup:
-im 1                                ; Set interrupt mode 1 (go to $0038 on interrupt)
-ei                                  ; Enable interrupts
+    ld sp,$3fff
+    ; im 1                                ; Set interrupt mode 1 (go to $0038 on interrupt)
+    ; ei                                  ; Enable interrupts
 
-ld sp,$3fff
+    call setup_sio
 
-; initialize output mode for IO ports A and 
-ld a,$0f
-out (pio_a_control),a
-ld a,$0f
-out (pio_b_control),a
+    ld a,0              ; set high byte of interrupt vectors to point to page 0
+    ld i,a
+    im 2                ; set interrupt mode 2
+    ei                  ; enable interupts
 
-call lcd_enable
+    ; initialize output mode for PIO ports A and 
+    ld a,$0f
+    out (pio_a_control),a
+    ld a,$0f
+    out (pio_b_control),a
 
-; Set page
-ld a,%10111000
-call lcd_send_command
+    call lcd_enable
 
-; Set column
-ld a,%01000000
-call lcd_send_command
+    ; Set page
+    ld a,%10111000
+    call lcd_send_command
 
-; Set page
-ld a,%10111000
-call lcd_send_command_cs2
+    ; Set column
+    ld a,%01000000
+    call lcd_send_command
 
-; Set column
-ld a,%01000000
-call lcd_send_command_cs2
+    ; Set page
+    ld a,%10111000
+    call lcd_send_command_cs2
 
-; Set display start line
-ld a,%11000000
-call lcd_send_command
-ld a,%11000000
-call lcd_send_command_cs2
+    ; Set column
+    ld a,%01000000
+    call lcd_send_command_cs2
 
-; Reset and clear
-ld a,$00
-ld (cursor_xy),a
-ld (cursor_xy+1),a
-ld (cmd_buffer_ptr),a
-ld hl,cmd_buffer
-ld de,cmd_buffer+1
-ld bc,$100
-ld (hl),$00
-ldir
+    ; Set display start line
+    ld a,%11000000
+    call lcd_send_command
+    ld a,%11000000
+    call lcd_send_command_cs2
 
-ld hl,prompt
-call lcd_send_asciiz
+    ; Reset and clear
+    ld a,$00
+    ld (cursor_xy),a
+    ld (cursor_xy+1),a
+    ld (cmd_buffer_ptr),a
+    ld hl,cmd_buffer
+    ld de,cmd_buffer+1
+    ld bc,$100
+    ld (hl),$00
+    ldir
+
+    ld hl,prompt
+    call lcd_send_asciiz
 
 main_loop:
     halt
     jp main_loop
+
+setup_sio:
+    ; Consult datasheet and manual for information on these settings.
+    ld a,%00110000              ; A     WR0     Error reset, select WR0
+    out (sio_a_control),a
+    ld a,%00011000              ; A     WR0     Channel reset, select WR0
+    out (sio_a_control),a
+    ld a,%00000100              ; A     WR0     Select WR4
+    out (sio_a_control),a
+    ld a,%00000100              ; A     WR4     x1 clock, 8 bit sync, 1 stop bit, odd parity, disable parity
+    out (sio_a_control),a
+    ld a,%00000101              ; A     WR0     Select WR5
+    out (sio_a_control),a
+    ld a,%01100000              ; A     WR5     Tx 8 bit chars, disable Tx
+    out (sio_a_control),a
+    ld a,%00000001              ; B     WR0     Select WR1
+    out (sio_b_control),a
+    ld a,%00000100              ; B     WR1     Status affects interrupt vector
+    out (sio_b_control),a
+    ld a,%00000010              ; B     WR0     Select WR2
+    out (sio_b_control),a
+    ld a,%00000000              ; B     WR2     Interrupt vector (bits 3-1 will be set according
+                                ;               to conditions (110x for char available, 111x
+                                ;               for special condition occurred)
+    out (sio_b_control),a
+    ld a,%00000001              ; A     WR0     Select WR1
+    out (sio_a_control),a
+    ld a,%00011000              ; A     WR1     Interrupt on all Rx chars, parity does not affect vector
+    out (sio_a_control),a
+    ld a,%00000011              ; A     WR0     Select WR3
+    out (sio_a_control),a
+    ld a,%11000001              ; A     WR3     8 bit chars, disable features, enable Rx
+    out (sio_a_control),a
+    ret
 
 cursor_inc:
     ld de,(cursor_xy)
@@ -483,10 +535,19 @@ lcd_enable:
     call lcd_latch
     ret
 
+lcd_busy_wait:
+    ld a,%00010001
+    out (pio_b_data),a
+    in a,(pio_a_data)
+    rlca
+    jr c,lcd_busy_wait
+    ret
+    
 ; Data in A
 ; Out: A corrupt
 lcd_send_command:
     push af
+    call lcd_busy_wait
     ld a,%00000010
     out (pio_b_data),a         ; 1. Copy control byte to port B
     pop af
@@ -497,6 +558,7 @@ lcd_send_command:
 
 lcd_send_command_cs2:
     push af
+    call lcd_busy_wait
     ld a,%00000100
     out (pio_b_data),a         ; 1. Copy control byte to port B
     pop af
@@ -507,6 +569,7 @@ lcd_send_command_cs2:
 
 lcd_send_data:
     push af
+    call lcd_busy_wait
     ld a,%00001010
     out (pio_b_data),a         ; 1. Copy control byte to port B
     pop af
@@ -517,6 +580,7 @@ lcd_send_data:
 
 lcd_send_data_cs2:
     push af
+    call lcd_busy_wait
     ld a,%00001100
     out (pio_b_data),a         ; 1. Copy control byte to port B
     pop af
@@ -531,6 +595,21 @@ lcd_latch:
     res lcd_e_bit,a             ; Unset command latch bit
     out (pio_b_data),a         ; 4. ...and unlatch E
     ret
+
+ps2_char_available:
+    push af
+    ; in a,(sio_a_data)
+    ld a,"!"
+    ld de,(cursor_xy)
+    call lcd_send_char
+    call cursor_inc
+    pop af
+exit_interrupt:
+    ei
+    reti
+
+ps2_special_condition:
+    jp $00
 
 ; err_bail:
 ;     jp $800    
