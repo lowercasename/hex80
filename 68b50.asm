@@ -27,33 +27,48 @@ acia_data_port equ $81
 org $0
 
 setup:
+    ld sp,$3FFF
+
     ld a,acia_reset_cmd
     out (acia_control_port),a
     ld a,acia_setup_cmd
     out (acia_control_port),a 
 
-setup_print:
-    ld hl,data_hello
+    ld hl,data_startup
+    call acia_print_asciiz
 
-print_char_acia:
-buffer_wait_loop:
-    in a,(acia_control_port)
-    bit 1,a                     ; Bit 1 written into Z register (0=Z, 1=NZ)
-                                ; Z reset (nz) if transmit register empty + ready for new data (TDRE high)
-                                ; Z set (z) if transmit register full (TDRE low)
-    jp z,buffer_wait_loop
+main_loop:
+    halt
+    jp main_loop
 
+acia_print_asciiz:
     ld a,(hl)
-    and a
-    jr z,print_char_acia_done
+    and a                           ; If A is 0, end of string reached
+    jr z,acia_print_asciiz_done     ; In which case end printing
+    call acia_print_char            ; Otherwise, print this char
+    inc hl                          ; Move to the next char
+    jr acia_print_asciiz            ; Restart the loop
+acia_print_asciiz_done:
+    ld a,$0D                        ; Print a newline
+    call acia_print_char
+    ld a,$0A
+    call acia_print_char
+    ret
+
+; Print an ASCII character in A.
+acia_print_char:
+    push af
+    acia_wait_loop:
+        in a,(acia_control_port)
+        bit 1,a                     ; Bit 1 written into Z register (0=Z, 1=NZ)
+                                    ; Z reset (nz) if transmit register empty + ready for new data (TDRE high)
+                                    ; Z set (z) if transmit register full (TDRE low)
+        jp z,acia_wait_loop
+    pop af
     out (acia_data_port),a
-    inc hl
-    jr print_char_acia
+    ret
 
-print_char_acia_done:
-    jr setup_print
-
-data_hello:
-    db "Hello, World! My name is HEX-80 and I am a handmade microcomputer!",$0D,$0A,0
+data_startup:
+    db "HEX-80 READY",0
 
 align 8192
