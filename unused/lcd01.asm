@@ -50,6 +50,8 @@ startup:               ;$ff terminated
     db $38,$0f,$01,$06,$ff
     
 message:
-    db "Boo! I am Cherry Pie!",0
+    db "Hello, World!",0
 
 ; $40: Start of second line of display
+
+align 8192
