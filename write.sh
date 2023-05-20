@@ -1,5 +1,7 @@
 #!/bin/sh
 
+set -e
+
 [ -z "$1" ] && echo "No input file supplied." && exit 1
 
 echo "Compiling $1..."

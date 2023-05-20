@@ -27,7 +27,7 @@ acia_data_port equ $81
 org $0
 
 setup:
-    ld sp,$3FFF
+    ld sp,$FFFF
 
     ld a,acia_reset_cmd
     out (acia_control_port),a
@@ -38,8 +38,15 @@ setup:
     call acia_print_asciiz
 
 main_loop:
-    halt
-    jp main_loop
+    ; Poll the ACIA RDRF bit (bit 0 of ACIA status register)
+    ; If set, read the data register and print the character
+    ; Otherwise, loop
+    in a,(acia_control_port)
+    bit 0,a
+    jr z,main_loop
+    in a,(acia_data_port)
+    call acia_print_char
+    jr main_loop
 
 acia_print_asciiz:
     ld a,(hl)
@@ -49,26 +56,22 @@ acia_print_asciiz:
     inc hl                          ; Move to the next char
     jr acia_print_asciiz            ; Restart the loop
 acia_print_asciiz_done:
-    ld a,$0D                        ; Print a newline
-    call acia_print_char
-    ld a,$0A
-    call acia_print_char
     ret
 
 ; Print an ASCII character in A.
 acia_print_char:
     push af
-    acia_wait_loop:
+    buffer_wait_loop:
         in a,(acia_control_port)
         bit 1,a                     ; Bit 1 written into Z register (0=Z, 1=NZ)
                                     ; Z reset (nz) if transmit register empty + ready for new data (TDRE high)
                                     ; Z set (z) if transmit register full (TDRE low)
-        jp z,acia_wait_loop
+        jp z,buffer_wait_loop       ; If transmit register full, wait
     pop af
     out (acia_data_port),a
     ret
 
 data_startup:
-    db "HEX-80 READY",0
+    db "HEX-80 READY",$0D,$0A,0
 
 align 8192
